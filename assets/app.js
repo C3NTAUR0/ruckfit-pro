@@ -118,6 +118,67 @@
     a.streakDays = S.streakDays;
   }
 
+  /* =========================================================
+     STORAGE — localStorage persistence
+     ========================================================= */
+  const STORAGE_KEY = 'ruckfit-state-v1';
+  const SET_KEYS = ['acknowledged','checklist','matchChecklist','travelChecklist','postMatchChecklist','programDone'];
+
+  function serializeState() {
+    const out = {};
+    for (const k in window.AppState) {
+      if (k === 'intervals' || k === 'listeners' || k === 'bestKg' || k === 'pbs') continue;
+      const v = window.AppState[k];
+      if (v instanceof Set) out[k] = { __set: true, items: [...v] };
+      else out[k] = v;
+    }
+    return out;
+  }
+
+  function deserializeState(data) {
+    for (const k in data) {
+      const v = data[k];
+      if (v && typeof v === 'object' && v.__set) data[k] = new Set(v.items);
+    }
+    // SET_KEYS that might be plain arrays from older saves
+    for (const k of SET_KEYS) {
+      if (Array.isArray(data[k])) data[k] = new Set(data[k]);
+      if (!(data[k] instanceof Set)) data[k] = new Set();
+    }
+    data.intervals = [];
+    data.listeners = [];
+    data.bestKg = {};
+    data.pbs = data.pbs || {};
+    return data;
+  }
+
+  function saveState() {
+    try {
+      if (!window.AppState.athlete) return; // nothing to save before onboarding
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(serializeState()));
+    } catch (e) {
+      console.warn('[ruckfit] save failed', e);
+    }
+  }
+
+  function loadState() {
+    try {
+      const raw = localStorage.getItem(STORAGE_KEY);
+      if (!raw) return null;
+      const data = deserializeState(JSON.parse(raw));
+      if (!data.athlete) return null; // invalid
+      return data;
+    } catch (e) {
+      console.warn('[ruckfit] load failed', e);
+      try { localStorage.removeItem(STORAGE_KEY); } catch {}
+      return null;
+    }
+  }
+
+  function clearState() {
+    try { localStorage.removeItem(STORAGE_KEY); } catch {}
+  }
+
   function composeReadiness(w) {
     if (!w) return 78;
     const sleep   = Math.min(100, (w.sleepHr / 8.5) * 100);
@@ -182,11 +243,43 @@
   let onbState = { step: 0, data: {} };
 
   function startOnboarding(force=false) {
-    if (!force && window.AppState.athlete) return; // already onboarded
+    // Try to restore from localStorage first (unless forcing re-onboard)
+    if (!force) {
+      const saved = loadState();
+      if (saved) {
+        Object.assign(window.AppState, saved);
+        // Apply theme attribute immediately
+        document.documentElement.setAttribute('data-theme', window.AppState.theme || 'dark');
+        document.getElementById('iconMoon').hidden = (window.AppState.theme === 'light');
+        document.getElementById('iconSun').hidden = (window.AppState.theme !== 'light');
+        document.getElementById('onboarding').hidden = true;
+        document.getElementById('app').hidden = false;
+        // Boot but DO NOT re-init runtime state (we have it from storage)
+        renderSidebar();
+        renderBottomNav();
+        updateTopbar();
+        updateNotifDot();
+        renderRoute();
+        if (!_globalBound) { bindGlobalEvents(); _globalBound = true; }
+        bindAutosave();
+        return;
+      }
+    }
+    if (!force && window.AppState.athlete) return; // already onboarded in memory
     onbState = { step: 0, data: structuredClone(R.DEMO_ATHLETE) };
     document.getElementById('onboarding').hidden = false;
     document.getElementById('app').hidden = true;
     renderOnbStep();
+  }
+
+  let _autosaveBound = false;
+  function bindAutosave() {
+    if (_autosaveBound) return;
+    _autosaveBound = true;
+    window.addEventListener('beforeunload', saveState);
+    window.addEventListener('visibilitychange', () => { if (document.hidden) saveState(); });
+    // Periodic safety net (cheap)
+    setInterval(saveState, 10000);
   }
 
   function renderOnbStep() {
@@ -405,6 +498,8 @@
     updateNotifDot();
     renderRoute();
     if (!_globalBound) { bindGlobalEvents(); _globalBound = true; }
+    bindAutosave();
+    saveState();
   }
 
   function renderSidebar() {
@@ -479,6 +574,7 @@
   }
 
   function renderRoute() {
+    saveState();
     clearViewIntervals();
     document.getElementById('notifPanel').hidden = true;
     closeModal();
@@ -682,6 +778,7 @@
     document.getElementById('iconSun').hidden  = t === 'dark';
     document.body.setAttribute('data-theme-transition', '1');
     setTimeout(() => document.body.removeAttribute('data-theme-transition'), 350);
+    saveState();
     // redraw charts for new colors
     renderRoute();
   }
@@ -704,12 +801,16 @@
 
   window.App = {
     navigate, openModal, closeModal, toast, setTheme,
-    persist: () => {/* no-op (in-memory only) */},
+    persist: saveState,
     refresh: () => { renderSidebar(); updateTopbar(); renderRoute(); },
     refreshTopbar: () => updateTopbar(),
     refreshNotifDot: () => updateNotifDot(),
     refreshView: () => renderRoute(),
     beginOnboarding: (force) => startOnboarding(force),
+    resetAll: () => {
+      clearState();
+      location.reload();
+    },
     getTodayProgram,
   };
 

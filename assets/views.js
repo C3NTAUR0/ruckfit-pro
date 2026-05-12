@@ -3377,8 +3377,8 @@
   function attachProfile() {
     const a = window.AppState.athlete;
     document.getElementById('resetOnb').onclick = () => {
-      if (confirm('Re-run onboarding? Your current profile will be reset.')) {
-        window.App.beginOnboarding(true);
+      if (confirm('Reset everything? Your profile, program, nutrition, recipes, and history will be permanently cleared.')) {
+        window.App.resetAll();
       }
     };
     document.getElementById('saveProfileBtn').onclick = () => {
